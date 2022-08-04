@@ -20,10 +20,12 @@ from sagemaker_containers.beta.framework import (
     worker,
 )
 from sklearn.compose import ColumnTransformer
-from sklearn.externals import joblib
+
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import Binarizer, OneHotEncoder, StandardScaler
+
+from sklearn.externals import joblib
 
 # Since we get a headerless CSV file we specify the column names here.
 feature_columns_names = [
@@ -107,7 +109,7 @@ if __name__ == "__main__":
     )
 
     preprocessor.fit(concat_data)
-
+    
     joblib.dump(preprocessor, os.path.join(args.model_dir, "model.joblib"))
 
     print("saved model!")
