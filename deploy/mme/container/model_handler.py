@@ -40,7 +40,16 @@ class ModelHandler(object):
         print(
             f"Modelhandler:model_file location::{model_dir}:: files:bin:={onlyfiles} :: going to load the first one::"
         )
+            
         self.model = model_file = model_file.load_model(onlyfiles[0])
+
+        try:
+            from os import getpid
+            from os import getppid
+            from threading import current_thread
+            print(f'model_file={model_file}:: Process:Main pid={getpid()}, ppid={getppid()} thread={current_thread().name}')
+        except:
+            print("eror in get pid:ignore")
 
         self.initialized = True
         print(f" perf initialize {(time.time() - start) * 1000} ms")
