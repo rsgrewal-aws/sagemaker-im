@@ -1,23 +1,24 @@
 
-name: "t5"
+name: "bloom-176b"
 backend: "python"
-max_batch_size: 8
+max_batch_size: 32
 input [
   {
-    name: "input"
+    name: "INPUT__0"
     data_type: TYPE_INT32
-    dims: [ -1 ]
-    
+    dims: [512]
   }
 ]
 output [
   {
-    name: "output"
+    name: "OUTPUT__0"
     data_type: TYPE_INT32
-    dims: [ -1 ]
+    dims: [ 512 ]
   }
 ]
-instance_group {
-  count: 1
-  kind: KIND_GPU
-}
+
+
+dynamic_batching {
+   preferred_batch_size: 16
+   max_queue_delay_microseconds: 1000
+ }
