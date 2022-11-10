@@ -38,7 +38,8 @@ RUN pip3 --no-cache-dir install mxnet \
                                 multi-model-server \
                                 sagemaker-inference \
                                 retrying \
-                                redis-py-cluster
+                                redis-py-cluster \
+                                boto3
 
 # Copy entrypoint script to the image
 COPY dockerd-entrypoint.py /usr/local/bin/dockerd-entrypoint.py

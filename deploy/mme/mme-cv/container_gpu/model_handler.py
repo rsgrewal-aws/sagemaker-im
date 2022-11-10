@@ -105,14 +105,14 @@ class ModelHandler(object):
             
             
             self.labels = [f"label::{l}" for l in range(1111)]
-            print(f"Modelhandler::initialize::Labels created::labels:{len(self.labels)}:")
+            print(f"GPU:Modelhandler::initialize::Labels created::labels:{len(self.labels)}:")
             
             self.redis_client = None
             self.init_redis()
                   
         except (mx.base.MXNetError, RuntimeError) as memerr:
-            if re.search("Failed to allocate (.*) Memory", str(memerr), re.IGNORECASE):
-                print(f"Modelhandler::initialize::Memory allocation exception: {memerr}")
+            if re.search("GPU:Failed to allocate (.*) Memory", str(memerr), re.IGNORECASE):
+                print(f"GPU:Modelhandler::initialize::Memory allocation exception: {memerr}")
                 raise MemoryError
             raise
 
@@ -146,7 +146,7 @@ class ModelHandler(object):
         except:
             print(f"GPU:error:connecting:to REDIS:{traceback.format_exc()}:")
         
-            
+        
     def preprocess(self, request):
         """
         Transform raw input into model input data.
@@ -154,32 +154,23 @@ class ModelHandler(object):
         :return: list of preprocessed model input data
         """
         # Take the input data and pre-process it make it inference ready
+        
+        # extract from the request image id 
 
         img_list = []
-        for idx, data in enumerate(request):
-            # Read the bytearray of the image from the input
-            img_arr = data.get("body")
-            print(f"Modelhandler::preprocess:payload:{type(img_arr)}:: {len(img_arr)}::")
-            
-            bytes_img_arr = bytes(img_arr)
-            print(f"Modelhandler::preprocess:payload:{type(bytes_img_arr)}:: {len(bytes_img_arr)}::")
-            
-            img_id = "12345" #hardcode
-            img_list.append(img_id)
-            
-            try:
-                #self.post_img(self.redis_client, img_id, img_arr) # store in redis
-                key = "raw_image:" + img_id
-                print(f"Modelhandler::preprocess:REDIS: key={key}")
-                write_redis = self.redis_client.set(key, bytes_img_arr) # raw_image_bytes)
+        for img_arr in self.get_img(self.redis_client):
+            # Input image is in bytearray, convert it to MXNet NDArray
+            img = mx.img.imdecode(img_arr)
+            if img is None:
+                return None
 
-            except:
-                print(f"Modelhandler::preprocess:{traceback.format_exc()}")
-                
-            print(f"Modelhandler::preprocess::image:id={img_id} stored in REDIS")
-                  
+            # convert into format (batch, RGB, width, height)
+            img = mx.image.imresize(img, 224, 224)  # resize
+            img = img.transpose((2, 0, 1))  # Channel first
+            img = img.expand_dims(axis=0)  # batchify
+            img_list.append(img)
 
-        print(f"Modelhandler::preprocess::finished")
+        print(f"GPU:Modelhandler::preprocess::FROM:REDIS:img_list::size={len(img_list)}")
         
         return img_list
 
@@ -190,38 +181,49 @@ class ModelHandler(object):
         :return: list of inference output in NDArray
         """
         # Do some inference call to engine here and return output
-        import boto3
-        runtime_sm_client = boto3.client(service_name="sagemaker-runtime")
-        endpoint_name = 'GPU-REDIS-CV-MME2022-11-10-21-43-59' # hard code 
-        
-        print(f"Modelhandler::going to invoke GPU")
-        
-        response = runtime_sm_client.invoke_endpoint(
-            EndpointName=endpoint_name,
-            ContentType="application/x-image",
-            Body=bytes(json.dumps({'key_id':"12345"}) , 'utf-8')
-            #CustomAttributes=json.dumps(custom_attr)
-        )
-        print(f"Modelhandler::finished invoke GPU")
-        response_body = response["Body"].read()
+        Batch = namedtuple("Batch", ["data"])
+        self.mx_model.forward(Batch(model_input))
+        prob = self.mx_model.get_outputs()[0].asnumpy()
+        return prob
 
-        model_predict = json.loads(response_body)
-        print(f"Modelhandler::final:prediction:{model_predict}::")
-        # - Modelhandler::final:prediction:['probability=0.244390, class=label::277', 'probability=0.170342, class=label::278', 'probability=0.145019, class=label::263', 'probability=0.059833, class=label::335', 'probability=0.051555, class=label::282']::
-        return model_predict
-        
-
-    def postprocess(self, inference_output):
+    def postprocess(self, inference_output, custom_attrs):
         """
         Return predict result in as list.
         :param inference_output: list of inference output
         :return: list of predict results
         """
+        # Take output from network and post-process to desired format
+        prob = np.squeeze(inference_output)
+        print(f"GPU:Modelhandler::postprocess::probability:{len(prob)}::{len(self.labels)}::custom_attrs={custom_attrs}::")
+        a = np.argsort(prob)[::-1]
         
-        print(f"Modelhandler::postprocess::probability={inference_output}::")
+        print(f"GPU:Modelhandler::postprocess::probability={a[0:5]}::")
         
-            
-        return [inference_output]
+        return [["probability=%f, class=%s" % (prob[i], self.labels[i]) for i in a[0:5]]]
+
+
+    def get(self, redis_client,custom_attrs):
+        print(f"GPU:Modelhandler::REDIS:CACHE:Starting::custom_attrs={custom_attrs}::")
+        key_mask = "customer:*"
+        customers = []
+        for key in redis_client.scan_iter(key_mask):
+            customer_id = key #key.split(':')[1]
+            customer = redis_client.hgetall(key)
+            customer['id'] = customer_id
+            customers.append(customer)
+            print(f"GPU:Modelhandler::REDIS:CACHE::{customer}")
+        return customers
+
+    def post(self, redis_client, json_struct):
+        print(json_struct)
+        json_str = json.dumps(json_struct)
+
+        customer_id = json_struct['customer_id'] #str(uuid.uuid4())
+        key = "customer:" + customer_id
+        write_redis = redis_client.hset(key, mapping=json_struct)
+        #customer = json_str
+        #customer['id'] = customer_id
+        return write_redis, 201
 
     def get_img(self,redis_client):
         key_mask = "raw_image:*"
@@ -240,29 +242,6 @@ class ModelHandler(object):
         write_redis = redis_client.set(key, raw_image_bytes)
         return write_redis, 201    
 
-    def get(self, redis_client):
-        print(f"Modelhandler::REDIS:CACHE:Starting")
-        key_mask = "customer:*"
-        customers = []
-        for key in redis_client.scan_iter(key_mask):
-            customer_id = key #key.split(':')[1]
-            customer = redis_client.hgetall(key)
-            customer['id'] = customer_id
-            customers.append(customer)
-            print(f"Modelhandler::REDIS:CACHE::{customer}")
-        return customers
-
-    def post(self, redis_client, json_struct):
-        print(json_struct)
-        json_str = json.dumps(json_struct)
-
-        customer_id = json_struct['customer_id'] #str(uuid.uuid4())
-        key = "customer:" + customer_id
-        write_redis = redis_client.hset(key, mapping=json_struct)
-        #customer = json_str
-        #customer['id'] = customer_id
-        return write_redis, 201
-    
     def handle(self, data, context):
         """
         Call preprocess, inference and post-process functions
@@ -270,9 +249,19 @@ class ModelHandler(object):
         :param context: mms context
         """
 
+        print("GPU:model_handler:handle")
+        print(f"GPU:model_handler:context={context}:")
+        custom_attrs = None
+        try:
+            print(f"GPU:model_handler:context={dir(context)}:")
+            print(f"GPU:model_handler:context={context.request_ids}") #get_all_request_header()}")
+            print(f"GPU:loaded CUSTOM ATTR: {custom_attrs}")
+        except:
+            print(f"GPU:context:error:{traceback.format_exc()}:")
+        
         model_input = self.preprocess(data)
         model_out = self.inference(model_input)
-        return self.postprocess(model_out)
+        return self.postprocess(model_out, custom_attrs)
 
 
 _service = ModelHandler()
