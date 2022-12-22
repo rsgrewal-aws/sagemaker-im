@@ -1,0 +1,29 @@
+name: "jit-resnet-v3-model"
+platform: "pytorch_libtorch"
+max_batch_size: 12
+input {
+  name: "INPUT__0"
+  data_type: TYPE_UINT8
+  dims: [3,480,856]
+}
+output {
+  name: "OUTPUT__0"
+  data_type: TYPE_FP32
+  dims: [-1]
+}
+output {
+  name: "OUTPUT__1"
+  data_type: TYPE_INT64
+  dims: [-1]
+}
+
+output {
+  name: "OUTPUT__2"
+  data_type: TYPE_FP32
+  dims: [-1]
+}
+
+instance_group {
+  count: 3
+  kind: KIND_GPU
+}
